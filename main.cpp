@@ -9,6 +9,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <map>
 
 const int PORT = 9006;
 const int MAX_EVENT_NUMBER = 1024;
@@ -18,6 +19,7 @@ const std::string ROOT_PATH = "./root";
 enum class HttpParseState {
 	REQUEST_LINE,
 	REQUEST_HEADER,
+	REQUEST_BODY,
 	REQUEST_DONE
 };
 
@@ -25,6 +27,9 @@ struct HttpRequest {
 	std::string method;
 	std::string path;
 	std::string version;
+	std::map<std::string, std::string> headers;
+	std::string body;
+	int content_length = 0;
 	bool valid = false;
 };
 
@@ -106,13 +111,14 @@ std::string make_error_response(const std::string& status, const std::string& me
 
 bool parse_request_line(const std::string& line, HttpRequest& request) {
 	std::istringstream line_stream(line);
+
 	line_stream >> request.method >> request.path >> request.version;
 
 	if(request.method.empty() || request.path.empty() || request.version.empty()) {
 		return false;
 	}
 
-	if(request.method != "GET") {
+	if(request.method != "GET" && request.method != "POST") {
 		return false;
 	}
 
@@ -131,35 +137,107 @@ bool parse_request_line(const std::string& line, HttpRequest& request) {
 	return true;
 }
 
+bool parse_header_line(const std::string line, HttpRequest& request) {
+	size_t colon_pos = line.find(':');
+
+	if(colon_pos == std::string::npos) {
+		return false;
+	}
+	
+	std::string key = line.substr(0, colon_pos);
+
+	std::string value = line.substr(colon_pos + 1);
+
+	while (!value.empty() && value.front() == ' ') {
+		value.erase(value.begin());
+	}
+
+	request.headers[key] = value;
+
+	if(key == "Content-Length") {
+		request.content_length = std::stoi(value);
+	}
+
+	return true;
+
+}
+
+std::map<std::string, std::string> parse_form_body(const std::string& body) {
+	std::map<std::string, std::string> form;
+
+	std::istringstream body_stream(body);
+
+	std::string pair;
+
+	while (std::getline(body_stream, pair, '&')) {
+		size_t equal_pos = pair.find('=');
+
+		if(equal_pos == std::string::npos) {
+			continue;
+		}
+
+		std::string key = pair.substr(0, equal_pos);
+		
+		std::string value = pair.substr(equal_pos + 1);
+
+		form[key] = value;
+	}
+
+	return form;	
+
+}
+
 HttpRequest parse_http_request(const std::string& raw_request) {
 	HttpRequest request;
 
 	HttpParseState state = HttpParseState::REQUEST_LINE;
 
-	std::istringstream request_stream(raw_request);
+	size_t line_start = 0;
 
-	std::string line;
+	while (true) {
+		size_t line_end = raw_request.find("\r\n", line_start);
 
-	while (std::getline(request_stream, line)) {
-		if(!line.empty() && line.back() == '\r') {
-			line.pop_back();
+		if(line_end == std::string::npos) {
+			break;
 		}
+
+		std::string line = raw_request.substr(line_start, line_end - line_start);
+
+		line_start = line_end + 2;
 
 		if(state == HttpParseState::REQUEST_LINE) {
 			if(!parse_request_line(line, request)) {
 				return request;
 			}
-		
+
 			state = HttpParseState::REQUEST_HEADER;
 		}else if(state == HttpParseState::REQUEST_HEADER) {
 			if(line.empty()) {
-				state = HttpParseState::REQUEST_DONE;
+				if(request.method == "POST" && request.content_length > 0) {
+					state = HttpParseState::REQUEST_BODY;
+				}else {
+					state = HttpParseState::REQUEST_DONE;
+				}
+
 				break;
+			}
+
+			if(!parse_header_line(line, request)) {
+				return request;
 			}
 		}
 	}
 
-	if(state == HttpParseState::REQUEST_DONE || state ==HttpParseState::REQUEST_HEADER) {
+	if(state == HttpParseState::REQUEST_BODY) {
+		if(line_start + request.content_length > raw_request.size()) {
+			return request;
+		}
+
+		request.body = raw_request.substr(line_start, request.content_length);
+
+		state = HttpParseState::REQUEST_DONE;
+	}
+	if(state == HttpParseState::REQUEST_DONE) {
 		request.valid = true;
 	}
 
@@ -171,6 +249,33 @@ std::string build_response(const std::string& raw_request) {
 
        if(!request.valid) {
 	       return make_error_response("400 Bad Request", "400 Bad Request");
+       }
+
+       if(request.method == "POST") {
+	       std::map<std::string, std::string> form = parse_form_body(request.body);
+
+	       std::string username = form["username"];
+
+	       std::string password = form["password"];
+
+	       std::string body = 
+		       "<!DOCTYPE html>"
+		       "<html>"
+		       "<head><meta charset=\"UTF-8\"><title>POST Result</title></head>"
+		       "<body>"
+		       "<h1>POST request received</h1>"
+		       "<p>path: " + request.path + "</p>"
+		       "<p>username: " + username + "</p>"
+		       "<p>password: " + password + "</p>"
+		       "</body>"
+		       "</html>";
+
+	       return "HTTP/1.1 200 OK\r\n"
+		      "Content-Type: text/html; charset=UTF-8\r\n"
+		      "Content-Length: " + std::to_string(body.size()) + "\r\n"
+		      "Connection: close\r\n"
+		      "\r\n" + 
+		      body;
        }
 
        std::string file_path = ROOT_PATH + request.path;
