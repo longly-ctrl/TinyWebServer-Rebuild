@@ -15,6 +15,19 @@ const int MAX_EVENT_NUMBER = 1024;
 const int BUFFER_SIZE = 4096;
 const std::string ROOT_PATH = "./root";
 
+enum class HttpParseState {
+	REQUEST_LINE,
+	REQUEST_HEADER,
+	REQUEST_DONE
+};
+
+struct HttpRequest {
+	std::string method;
+	std::string path;
+	std::string version;
+	bool valid = false;
+};
+
 int set_non_blocking(int fd) {
 	int old_option = fcntl(fd, F_GETFL);
 	int new_option = old_option | O_NONBLOCK;
@@ -32,7 +45,7 @@ void add_fd(int epoll_fd, int fd) {
 }
 
 std::string get_file_type(const std::string& file_path) {
-	if(file_path.size() >= 5 && file_path.substr(file_path.size.() - 5) == ".html") {
+	if(file_path.size() >= 5 && file_path.substr(file_path.size() - 5) == ".html") {
 		return "text/html; charset=UTF-8";
 	}
 
@@ -59,50 +72,128 @@ std::string get_file_type(const std::string& file_path) {
 	return "text/plain; charset=UTF-8";
 }
 
-std::string read_file(const std::string& file_path) {
+bool read_file(const std::string& file_path, std::string& body) {
 	std::ifstream file(file_path, std::ios::in | std::ios::binary);
 
 	if(!file.is_open()) {
-		return "";
+		return false;
 	}
 
 	std::ostringstream content;
 
 	content << file.rdbuf();
 
-	return content.str();
+	body = content.str();
+
+	return true;
 }
 
-std::string parse_request_path(const std::string& request) {
-	std::istringstream request_stream(request);
+std::string make_error_response(const std::string& status, const std::string& message) {
+	std::string body = 
+		"<!DOCTYPE html>"
+		"<html>"
+		"<head><meta charset=\"UTF-8\"><title>" + status + "</title></head>"
+		"<body><h1>" + message + "</h1></body>"
+		"</html>";
 
-	std::string method;
-	std::string path;
-	std::string version;
+	return "HTTP/1.1" + status + "\r\n"
+		"Content-Type: text/html; charset=UTF-8\r\n"
+		"Content-Length: " + std::to_string(body.size()) + "\r\n"
+		"Connection: close\r\n"
+		"\r\n" +
+		body;
+}
 
-	request_stream >> method >> path >> version;
+bool parse_request_line(const std::string& line, HttpRequest& request) {
+	std::istringstream line_stream(line);
+	line_stream >> request.method >> request.path >> request.version;
 
-	if(method != "GET") {
-		reurn "";
+	if(request.method.empty() || request.path.empty() || request.version.empty()) {
+		return false;
 	}
 
-	if(path == "/") {
-		path = "/index.html";
+	if(request.method != "GET") {
+		return false;
 	}
 
-	return path;
+	if(request.version != "HTTP/1.1" && request.version != "HTTP/1.0") {
+		return false;
+	}
+
+	if(request.path == "/") {
+		request.path = "/index.html";
+	}
+
+	if(request.path.find("..") != std::string::npos) {
+		return false;
+	}
+
+	return true;
+}
+
+HttpRequest parse_http_request(const std::string& raw_request) {
+	HttpRequest request;
+
+	HttpParseState state = HttpParseState::REQUEST_LINE;
+
+	std::istringstream request_stream(raw_request);
+
+	std::string line;
+
+	while (std::getline(request_stream, line)) {
+		if(!line.empty() && line.back() == '\r') {
+			line.pop_back();
+		}
+
+		if(state == HttpParseState::REQUEST_LINE) {
+			if(!parse_request_line(line, request)) {
+				return request;
+			}
+		
+			state = HttpParseState::REQUEST_HEADER;
+		}else if(state == HttpParseState::REQUEST_HEADER) {
+			if(line.empty()) {
+				state = HttpParseState::REQUEST_DONE;
+				break;
+			}
+		}
+	}
+
+	if(state == HttpParseState::REQUEST_DONE || state ==HttpParseState::REQUEST_HEADER) {
+		request.valid = true;
+	}
+
+	return request;
+}
+
+std::string build_response(const std::string& raw_request) {
+       HttpRequest request = parse_http_request(raw_request);
+
+       if(!request.valid) {
+	       return make_error_response("400 Bad Request", "400 Bad Request");
+       }
+
+       std::string file_path = ROOT_PATH + request.path;
+
+       std::string body;
+
+       bool success = read_file(file_path, body);
+
+       if(!success) {
+	       return make_error_response("404 Not Found", "404 Not Found");
+       }
+
+       std::string content_type = get_file_type(file_path);
+
+       return "HTTP/1.1 200 OK\r\n"
+	      "Content-Type: " + content_type + "\r\n"
+	      "Content-Length: " + std::to_string(body.size()) + "\r\n"
+	      "Connection: close\r\n"
+	      "\r\n" + 
+	      body;
 }
 
 
-std::string build_response(const std::string& request) {
-
-	std::string path = parse_request_path(request);
-
-	if(path.empty()) {
-		std::string body = "<h1>400 Bad Request</h1>";
-
-	return 
-}
 
 int main() {
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -178,7 +269,7 @@ int main() {
 			}else if(events[i].events & EPOLLIN) {
 				char buffer[BUFFER_SIZE];
 				std::memset(buffer, 0, sizeof(buffer));
-
+				//return byte numbers
 				int bytes_read = read(sock_fd, buffer, sizeof(buffer) - 1);
 
 				if(bytes_read <= 0) {
@@ -186,9 +277,11 @@ int main() {
 					continue;
 				}
 
-				std::cout << "request:\n" << buffer << std::endl;
+				std::string raw_request(buffer);
 
-				std::string response = build_response();
+				std::cout << "request:\n" << raw_request << std::endl;
+
+				std::string response = build_response(raw_request);
 
 				write(sock_fd, response.c_str(), response.size());
 
