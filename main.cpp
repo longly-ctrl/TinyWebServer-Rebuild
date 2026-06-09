@@ -10,11 +10,19 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <map>
+#include <mysql/mysql.h>
 
 const int PORT = 9006;
 const int MAX_EVENT_NUMBER = 1024;
 const int BUFFER_SIZE = 4096;
 const std::string ROOT_PATH = "./root";
+const char* DB_HOST = "localhost";
+const char* DB_USER = "tinyweb";
+const char* DB_PASSWORD = "123123";
+const char* DB_DATABASE = "yourdb";
+const unsigned int DB_PORT = 3306;
+
+MYSQL* mysql_conn = nullptr;
 
 enum class HttpParseState {
 	REQUEST_LINE,
@@ -244,6 +252,138 @@ HttpRequest parse_http_request(const std::string& raw_request) {
 	return request;
 }
 
+bool init_mysql(){
+	mysql_conn = mysql_init(nullptr);
+
+	if(mysql_conn == nullptr) {
+		std::cerr << "mysql_init failed\n";
+		return false;
+	}
+
+	MYSQL* result = mysql_real_connect(
+			mysql_conn,
+			DB_HOST,
+			DB_USER,
+			DB_PASSWORD,
+			DB_DATABASE,
+			DB_PORT,
+			nullptr,
+			0
+			);
+
+	if(result == nullptr){
+		std::cerr << "mysql_real_connect failed: " << mysql_error(mysql_conn) << '\n';
+		mysql_close(mysql_conn);
+		mysql_conn = nullptr;
+		return false;
+	}
+
+	mysql_set_character_set(mysql_conn, "utf8mb4");
+
+	std::cout << "mysql connected\n";
+
+	return true;
+}
+
+std::string mysql_escape(const std::string& text) {
+	std::string escaped;
+
+	escaped.resize(text.size() * 2 + 1);
+	
+	unsigned long length = mysql_real_escape_string(
+			mysql_conn,
+			&escaped[0],
+			text.c_str(),
+			text.size()
+			);
+
+	escaped.resize(length);
+
+	return escaped;
+}
+
+bool mysql_user_exists(const std::string& username) {
+	std::string safe_username = mysql_escape(username);
+
+	std::string sql =
+		"SELECT username FROM user WHERE username='" + safe_username + "' LIMIT 1";
+
+	int ret = mysql_query(mysql_conn, sql.c_str());
+
+	if(ret != 0){
+		std::cerr << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		return false;
+	}
+
+	MYSQL_RES* result = mysql_store_result(mysql_conn);
+
+	if(result == nullptr) {
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(result);
+
+	bool exists = (row != nullptr);
+
+	mysql_free_result(result);
+
+	return exists;
+}
+
+bool mysql_check_login(const std::string& username, const std::string& password){
+	std::string safe_username = mysql_escape(username);
+
+	std::string safe_password = mysql_escape(password);
+
+	std::string sql =
+		"SELECT username FROM user WHERE username='" + safe_username + "' AND passwd='" +
+		safe_password + "' LIMIT 1";
+
+	int ret = mysql_query(mysql_conn, sql.c_str());
+
+	if(ret != 0){
+		std::cout << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		return false;
+	}
+
+	MYSQL_RES* result = mysql_store_result(mysql_conn);
+
+	if(result == nullptr){
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(result);
+
+	bool success = (row != nullptr);
+
+	mysql_free_result(result);
+
+	return success;
+}
+
+bool mysql_register_user(const std::string& username, std::string& password) {
+	if(mysql_user_exists(username)) {
+		return false;
+	}
+
+	std::string safe_username = mysql_escape(username);
+	std::string safe_password = mysql_escape(password);
+
+	std::string sql = 
+		"INSERT INTO suer(username, password) VALUES('" +
+		safe_username + "', '" + safe_password + "')";
+
+	int ret = mysql_query(mysql_conn, sql.c_str());
+
+	if(ret != 0) {
+		std::cerr << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		return false;
+	}
+
+	return true;
+}
+
+
 std::string build_response(const std::string& raw_request) {
        HttpRequest request = parse_http_request(raw_request);
 
@@ -258,6 +398,36 @@ std::string build_response(const std::string& raw_request) {
 
 	       std::string password = form["password"];
 
+	       if(username.empty() || password.empty()) {
+		       return make_error_response("400 Bad Request", "username or password empty.");
+	       }
+
+	       std::string message;
+
+	       if(request.path == "./login") {
+		       bool success = mysql_check_login(username, password);
+
+		       if(success) {
+			       message = "login success";
+		       }else{
+			       message = "login failed";
+		       }
+	       }else if(request.path == "./register") {
+		       bool success = mysql_register_user(username, password);
+
+		       if(success) {
+			       message = "register success";
+		       }else{
+			       message = "register failed";
+		       }
+	       }
+	       else{
+		       return make_error_response("404 Not Found", "404 Not Found");
+	       }
+		     
+
+
+
 	       std::string body = 
 		       "<!DOCTYPE html>"
 		       "<html>"
@@ -267,7 +437,7 @@ std::string build_response(const std::string& raw_request) {
 		       "<p>path: " + request.path + "</p>"
 		       "<p>username: " + username + "</p>"
 		       "<p>password: " + password + "</p>"
-		       "</body>"
+
 		       "</html>";
 
 	       return "HTTP/1.1 200 OK\r\n"
@@ -277,7 +447,7 @@ std::string build_response(const std::string& raw_request) {
 		      "\r\n" + 
 		      body;
        }
-
+	
        std::string file_path = ROOT_PATH + request.path;
 
        std::string body;
@@ -301,6 +471,10 @@ std::string build_response(const std::string& raw_request) {
 
 
 int main() {
+
+	if(!init_mysql()) {
+		return 1;
+	}
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 
 	if(listen_fd == -1) {
@@ -396,6 +570,10 @@ int main() {
 	}
 	close(epoll_fd);
 	close(listen_fd);
+
+	if(mysql_conn != nullptr) {
+		mysql_close(mysql_conn);
+	}
 	return 0;
 }
 
