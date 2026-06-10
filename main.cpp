@@ -109,7 +109,7 @@ std::string make_error_response(const std::string& status, const std::string& me
 		"<body><h1>" + message + "</h1></body>"
 		"</html>";
 
-	return "HTTP/1.1" + status + "\r\n"
+	return "HTTP/1.1 " + status + "\r\n"
 		"Content-Type: text/html; charset=UTF-8\r\n"
 		"Content-Length: " + std::to_string(body.size()) + "\r\n"
 		"Connection: close\r\n"
@@ -370,7 +370,7 @@ bool mysql_register_user(const std::string& username, std::string& password) {
 	std::string safe_password = mysql_escape(password);
 
 	std::string sql = 
-		"INSERT INTO suer(username, password) VALUES('" +
+		"INSERT INTO user(username, passwd) VALUES('" +
 		safe_username + "', '" + safe_password + "')";
 
 	int ret = mysql_query(mysql_conn, sql.c_str());
@@ -404,7 +404,7 @@ std::string build_response(const std::string& raw_request) {
 
 	       std::string message;
 
-	       if(request.path == "./login") {
+	       if(request.path == "/login") {
 		       bool success = mysql_check_login(username, password);
 
 		       if(success) {
@@ -412,7 +412,7 @@ std::string build_response(const std::string& raw_request) {
 		       }else{
 			       message = "login failed";
 		       }
-	       }else if(request.path == "./register") {
+	       }else if(request.path == "/register") {
 		       bool success = mysql_register_user(username, password);
 
 		       if(success) {
@@ -431,13 +431,11 @@ std::string build_response(const std::string& raw_request) {
 	       std::string body = 
 		       "<!DOCTYPE html>"
 		       "<html>"
-		       "<head><meta charset=\"UTF-8\"><title>POST Result</title></head>"
+		       "<head><meta charset=\"UTF-8\"><title>Result</title></head>"
 		       "<body>"
-		       "<h1>POST request received</h1>"
-		       "<p>path: " + request.path + "</p>"
+		       "<h1>" + message + "</h1>"
 		       "<p>username: " + username + "</p>"
-		       "<p>password: " + password + "</p>"
-
+		       "</body>"
 		       "</html>";
 
 	       return "HTTP/1.1 200 OK\r\n"
