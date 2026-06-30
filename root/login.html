@@ -1,28 +1,49 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | TinyWebServer</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <h1>Login</h1>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/index.html">
+                <span class="brand-mark">T</span>
+                <span>TinyWebServer</span>
+            </a>
 
-    <form action="/login" method="post">
-        <p>
-            <label>Username:</label>
-            <input type="text" name="username">
-        </p>
+            <nav class="nav-links" aria-label="Primary navigation">
+                <a class="nav-link" href="/index.html">Home</a>
+                <a class="nav-link" href="/register.html">Register</a>
+            </nav>
+        </header>
 
-        <p>
-            <label>Password:</label>
-            <input type="password" name="password">
-        </p>
+        <main class="main-area auth-layout">
+            <section class="panel auth-card" aria-labelledby="login-title">
+                <p class="eyebrow">Account access</p>
+                <h1 id="login-title">Login</h1>
+                <p class="auth-copy">Use an existing account stored in the TinyWebServer MySQL table.</p>
 
-        <button type="submit">Login</button>
-    </form>
+                <form class="form-stack" action="/login" method="post">
+                    <div class="field">
+                        <label for="username">Username</label>
+                        <input id="username" type="text" name="username" autocomplete="username" required>
+                    </div>
 
-    <p>
-        <a href="/index.html">Back</a>
-    </p>
+                    <div class="field">
+                        <label for="password">Password</label>
+                        <input id="password" type="password" name="password" autocomplete="current-password" required>
+                    </div>
+
+                    <div class="form-actions">
+                        <button class="button button-primary" type="submit">Login</button>
+                        <a class="secondary-link" href="/index.html">Back to home</a>
+                    </div>
+                </form>
+            </section>
+        </main>
+    </div>
 </body>
 </html>
