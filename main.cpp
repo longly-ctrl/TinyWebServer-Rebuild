@@ -11,6 +11,12 @@
 #include <unistd.h>
 #include <map>
 #include <mysql/mysql.h>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
 
 const int PORT = 9006;
 const int MAX_EVENT_NUMBER = 1024;
@@ -23,6 +29,9 @@ const char* DB_DATABASE = "yourdb";
 const unsigned int DB_PORT = 3306;
 
 MYSQL* mysql_conn = nullptr;
+
+std::mutex mysql_mutex;
+
 
 enum class HttpParseState {
 	REQUEST_LINE,
@@ -466,6 +475,60 @@ std::string build_response(const std::string& raw_request) {
 	      body;
 }
 
+class ThreadPool {
+public:
+	ThreadPool(int thread_count) : stop(false) {
+		for(int i = 0; i < thread_count; ++i) {
+			workers.emplace_back([this]() {
+					while(true){
+						std::function<void> task;
+						{
+							std::unique_lock<std::mutex> lock(queue_mutex);
+							condition.wait(lock, [this]() {
+									return stop || !tasks.empty();
+									});
+							if(stop && tasks.empty()) {
+								return;
+							}
+
+							task = tasks.front();
+							tasks.pop();
+						}
+
+						task();
+						}
+					});
+		}
+	}
+
+	~ThreadPool() {
+		{
+			std::unique_lock<std::mutex> lock(queue_mutex);
+			stop = true;
+		}
+
+		condition.notify_all();
+		for(std::thread& worker : workers) {
+			worker.join();
+		}
+	}
+	void append(std::function<void()> task) {
+		{
+			std::unique_lock<std::mutex> lock(queue_mutex);
+			tasks.push(task);
+		}
+
+		condition.notify_one();
+	}
+
+
+
+private:
+	std::vector<std::thread> workers;
+	std::queue<std::function<void>> tasks;
+	std::mutex queue_mutex;
+	std::condition_variable condition;
+	bool stop;
 
 
 int main() {

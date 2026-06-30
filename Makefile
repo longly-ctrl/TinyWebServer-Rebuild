@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -g
+CXXFLAGS = -std=c++11 -Wall -g -pthread
 MYSQL_FLAGS = $(shell mysql_config --cflags --libs)
 
 server: main.cpp
