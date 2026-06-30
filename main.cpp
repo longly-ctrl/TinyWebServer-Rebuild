@@ -411,6 +411,7 @@ std::string build_response(const std::string& raw_request) {
 		       return make_error_response("400 Bad Request", "username or password empty.");
 	       }
 
+	       std::lock_guard<std::mutex> lock(mysql_mutex);
 	       std::string message;
 
 	       if(request.path == "/login") {
@@ -481,7 +482,7 @@ public:
 		for(int i = 0; i < thread_count; ++i) {
 			workers.emplace_back([this]() {
 					while(true){
-						std::function<void> task;
+						std::function<void()> task;
 						{
 							std::unique_lock<std::mutex> lock(queue_mutex);
 							condition.wait(lock, [this]() {
@@ -525,10 +526,11 @@ public:
 
 private:
 	std::vector<std::thread> workers;
-	std::queue<std::function<void>> tasks;
+	std::queue<std::function<void()>> tasks;
 	std::mutex queue_mutex;
 	std::condition_variable condition;
 	bool stop;
+};
 
 
 int main() {
@@ -580,6 +582,7 @@ int main() {
 	}
 
 	add_fd(epoll_fd, listen_fd);
+	ThreadPool pool(8);
 
 	std::cout << "server start at port " << PORT << "\n";
 
@@ -617,7 +620,9 @@ int main() {
 					continue;
 				}
 
-				std::string raw_request(buffer);
+				std::string raw_request(buffer, bytes_read);
+
+				pool.append([sock_fd, raw_request](){
 
 				std::cout << "request:\n" << raw_request << std::endl;
 
@@ -626,6 +631,7 @@ int main() {
 				write(sock_fd, response.c_str(), response.size());
 
 				close(sock_fd);
+				});
 			}
 		}
 	}
