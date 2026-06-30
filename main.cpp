@@ -28,10 +28,6 @@ const char* DB_PASSWORD = "123123";
 const char* DB_DATABASE = "yourdb";
 const unsigned int DB_PORT = 3306;
 
-MYSQL* mysql_conn = nullptr;
-
-std::mutex mysql_mutex;
-
 
 enum class HttpParseState {
 	REQUEST_LINE,
@@ -261,38 +257,7 @@ HttpRequest parse_http_request(const std::string& raw_request) {
 	return request;
 }
 
-bool init_mysql(){
-	mysql_conn = mysql_init(nullptr);
 
-	if(mysql_conn == nullptr) {
-		std::cerr << "mysql_init failed\n";
-		return false;
-	}
-
-	MYSQL* result = mysql_real_connect(
-			mysql_conn,
-			DB_HOST,
-			DB_USER,
-			DB_PASSWORD,
-			DB_DATABASE,
-			DB_PORT,
-			nullptr,
-			0
-			);
-
-	if(result == nullptr){
-		std::cerr << "mysql_real_connect failed: " << mysql_error(mysql_conn) << '\n';
-		mysql_close(mysql_conn);
-		mysql_conn = nullptr;
-		return false;
-	}
-
-	mysql_set_character_set(mysql_conn, "utf8mb4");
-
-	std::cout << "mysql connected\n";
-
-	return true;
-}
 
 std::string mysql_escape(const std::string& text) {
 	std::string escaped;
@@ -476,6 +441,78 @@ std::string build_response(const std::string& raw_request) {
 	      body;
 }
 
+class MysqlConnectionPool {
+public:
+	bool init(int connection_count) {
+		for(int i = 0; i < connection_count; ++i) {
+			MYSQL* conn = mysql_init(nullptr);
+			if(conn == nullptr) {
+				return false;
+			}
+
+			MYSQL* result = mysql_real_connect(
+					conn,
+					DB_HOST,
+					DB_USER,
+					DB_PASSWORD,
+					DB_DATABASE,
+					DB_POST,
+					nullptr,
+					0
+					);
+			if(result == nullptr) {
+				std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << '\n';
+				mysql_close(conn);
+				return false;
+			}
+
+			mysql_set_character_set(conn, "utf8mb4");
+			connections.push(conn);
+		}
+
+		return true;
+	}
+
+	MYSQL* get_connection() {
+		std::unique_lock<std::mutex> lock(pool_mutex);
+		condition.wait(lock, [this]() {
+				return !connections.empty();
+				});
+		MYSQL* conn = connections.front();
+		connections.pop();
+
+		return conn;
+	}
+
+	void release_connection(MYSQL* conn) {
+		if(conn == nullptr){
+			return;
+		}
+
+		{
+			std::unique_lock<std::mutex> lock(pool_mutex);
+			connections.push(conn);
+		}
+		condition.notify_one();
+	}
+
+	void close_pool() {
+		std::unique_lock<std::mutex> lock(pool_mutex);
+		while(!connections.empty()) {
+			MYSQL* conn = connections.front();
+			connections.pop();
+			mysql_close(conn);
+		}
+	}
+
+private:
+	std::queue<MYSQL*> connections;
+	std::mutex pool_mutex;
+	std::condition_variable condition;
+};
+
+MysqlConectionPool mysql_pool;
+
 class ThreadPool {
 public:
 	ThreadPool(int thread_count) : stop(false) {
@@ -535,7 +572,7 @@ private:
 
 int main() {
 
-	if(!init_mysql()) {
+	if(!mysql_pool.iniy(8)) {
 		return 1;
 	}
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -638,9 +675,7 @@ int main() {
 	close(epoll_fd);
 	close(listen_fd);
 
-	if(mysql_conn != nullptr) {
-		mysql_close(mysql_conn);
-	}
+	mysql_pool.close_pool();
 	return 0;
 }
 
