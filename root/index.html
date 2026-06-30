@@ -1,18 +1,69 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TinyWebServer Rebuild</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <h1>Hello TinyWebServer</h1>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/index.html">
+                <span class="brand-mark">T</span>
+                <span>TinyWebServer</span>
+            </a>
 
-    <p>
-        <a href="/login.html">Login</a>
-    </p>
+            <nav class="nav-links" aria-label="Primary navigation">
+                <a class="nav-link" href="/login.html">Login</a>
+                <a class="nav-link" href="/register.html">Register</a>
+            </nav>
+        </header>
 
-    <p>
-        <a href="/register.html">Register</a>
-    </p>
+        <main class="main-area">
+            <section class="hero-grid" aria-labelledby="hero-title">
+                <div class="hero-copy">
+                    <p class="eyebrow">C++ Linux Web Server</p>
+                    <h1 id="hero-title">TinyWebServer Rebuild</h1>
+                    <p class="lede">
+                        A compact web server rebuilt around epoll, HTTP parsing, MySQL authentication, and a thread-pool architecture.
+                    </p>
+
+                    <div class="actions">
+                        <a class="button button-primary" href="/login.html">Login</a>
+                        <a class="button button-accent" href="/register.html">Create account</a>
+                    </div>
+                </div>
+
+                <aside class="panel status-panel" aria-label="Server overview">
+                    <div class="panel-header">
+                        <p class="panel-title">Runtime Path</p>
+                        <span class="badge">Online</span>
+                    </div>
+
+                    <div class="metric-stack">
+                        <div class="metric">
+                            <p class="metric-label">Network Core</p>
+                            <p class="metric-value">epoll</p>
+                        </div>
+
+                        <div class="metric">
+                            <p class="metric-label">Auth Storage</p>
+                            <p class="metric-value">MySQL</p>
+                        </div>
+
+                        <div class="metric">
+                            <p class="metric-label">Server Port</p>
+                            <p class="metric-value">9006</p>
+                        </div>
+                    </div>
+
+                    <p class="panel-footer">
+                        Static files are served from the root directory while login and registration use POST requests.
+                    </p>
+                </aside>
+            </section>
+        </main>
+    </div>
 </body>
 </html>
