@@ -258,6 +258,77 @@ HttpRequest parse_http_request(const std::string& raw_request) {
 }
 
 
+class MysqlConnectionPool {
+public:
+	bool init(int connection_count) {
+		for(int i = 0; i < connection_count; ++i) {
+			MYSQL* conn = mysql_init(nullptr);
+			if(conn == nullptr) {
+				return false;
+			}
+
+			MYSQL* result = mysql_real_connect(
+					conn,
+					DB_HOST,
+					DB_USER,
+					DB_PASSWORD,
+					DB_DATABASE,
+					DB_PORT,
+					nullptr,
+					0
+					);
+			if(result == nullptr) {
+				std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << '\n';
+				mysql_close(conn);
+				return false;
+			}
+
+			mysql_set_character_set(conn, "utf8mb4");
+			connections.push(conn);
+		}
+
+		return true;
+	}
+
+	MYSQL* get_connection() {
+		std::unique_lock<std::mutex> lock(pool_mutex);
+		condition.wait(lock, [this]() {
+				return !connections.empty();
+				});
+		MYSQL* conn = connections.front();
+		connections.pop();
+
+		return conn;
+	}
+
+	void release_connection(MYSQL* conn) {
+		if(conn == nullptr){
+			return;
+		}
+
+		{
+			std::unique_lock<std::mutex> lock(pool_mutex);
+			connections.push(conn);
+		}
+		condition.notify_one();
+	}
+
+	void close_pool() {
+		std::unique_lock<std::mutex> lock(pool_mutex);
+		while(!connections.empty()) {
+			MYSQL* conn = connections.front();
+			connections.pop();
+			mysql_close(conn);
+		}
+	}
+
+private:
+	std::queue<MYSQL*> connections;
+	std::mutex pool_mutex;
+	std::condition_variable condition;
+};
+
+MysqlConnectionPool mysql_pool;
 
 std::string mysql_escape(MYSQL* conn, const std::string& text) {
 	std::string escaped;
@@ -277,7 +348,7 @@ std::string mysql_escape(MYSQL* conn, const std::string& text) {
 }
 
 bool mysql_user_exists(MYSQL* conn, const std::string& username) {
-	std::string safe_username = mysql_escape(username);
+	std::string safe_username = mysql_escape(conn, username);
 
 	std::string sql =
 		"SELECT username FROM user WHERE username='" + safe_username + "' LIMIT 1";
@@ -335,7 +406,7 @@ bool mysql_check_login(MYSQL* conn, const std::string& username, const std::stri
 	return success;
 }
 
-bool mysql_register_user(MYSQL* conn, const std::string& username, std::string& password) {
+bool mysql_register_user(MYSQL* conn, const std::string& username, const std::string& password) {
 	if(mysql_user_exists(conn, username)) {
 		return false;
 	}
@@ -356,6 +427,8 @@ bool mysql_register_user(MYSQL* conn, const std::string& username, std::string& 
 
 	return true;
 }
+
+
 
 
 std::string build_response(const std::string& raw_request) {
@@ -442,78 +515,6 @@ std::string build_response(const std::string& raw_request) {
 	      "\r\n" + 
 	      body;
 }
-
-class MysqlConnectionPool {
-public:
-	bool init(int connection_count) {
-		for(int i = 0; i < connection_count; ++i) {
-			MYSQL* conn = mysql_init(nullptr);
-			if(conn == nullptr) {
-				return false;
-			}
-
-			MYSQL* result = mysql_real_connect(
-					conn,
-					DB_HOST,
-					DB_USER,
-					DB_PASSWORD,
-					DB_DATABASE,
-					DB_POST,
-					nullptr,
-					0
-					);
-			if(result == nullptr) {
-				std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << '\n';
-				mysql_close(conn);
-				return false;
-			}
-
-			mysql_set_character_set(conn, "utf8mb4");
-			connections.push(conn);
-		}
-
-		return true;
-	}
-
-	MYSQL* get_connection() {
-		std::unique_lock<std::mutex> lock(pool_mutex);
-		condition.wait(lock, [this]() {
-				return !connections.empty();
-				});
-		MYSQL* conn = connections.front();
-		connections.pop();
-
-		return conn;
-	}
-
-	void release_connection(MYSQL* conn) {
-		if(conn == nullptr){
-			return;
-		}
-
-		{
-			std::unique_lock<std::mutex> lock(pool_mutex);
-			connections.push(conn);
-		}
-		condition.notify_one();
-	}
-
-	void close_pool() {
-		std::unique_lock<std::mutex> lock(pool_mutex);
-		while(!connections.empty()) {
-			MYSQL* conn = connections.front();
-			connections.pop();
-			mysql_close(conn);
-		}
-	}
-
-private:
-	std::queue<MYSQL*> connections;
-	std::mutex pool_mutex;
-	std::condition_variable condition;
-};
-
-MysqlConectionPool mysql_pool;
 
 class ThreadPool {
 public:
