@@ -259,13 +259,13 @@ HttpRequest parse_http_request(const std::string& raw_request) {
 
 
 
-std::string mysql_escape(const std::string& text) {
+std::string mysql_escape(MYSQL* conn, const std::string& text) {
 	std::string escaped;
 
 	escaped.resize(text.size() * 2 + 1);
 	
 	unsigned long length = mysql_real_escape_string(
-			mysql_conn,
+			conn,
 			&escaped[0],
 			text.c_str(),
 			text.size()
@@ -276,20 +276,20 @@ std::string mysql_escape(const std::string& text) {
 	return escaped;
 }
 
-bool mysql_user_exists(const std::string& username) {
+bool mysql_user_exists(MYSQL* conn, const std::string& username) {
 	std::string safe_username = mysql_escape(username);
 
 	std::string sql =
 		"SELECT username FROM user WHERE username='" + safe_username + "' LIMIT 1";
 
-	int ret = mysql_query(mysql_conn, sql.c_str());
+	int ret = mysql_query(conn, sql.c_str());
 
 	if(ret != 0){
-		std::cerr << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		std::cerr << "mysql_query failed: " << mysql_error(conn) << '\n';
 		return false;
 	}
 
-	MYSQL_RES* result = mysql_store_result(mysql_conn);
+	MYSQL_RES* result = mysql_store_result(conn);
 
 	if(result == nullptr) {
 		return false;
@@ -304,23 +304,23 @@ bool mysql_user_exists(const std::string& username) {
 	return exists;
 }
 
-bool mysql_check_login(const std::string& username, const std::string& password){
-	std::string safe_username = mysql_escape(username);
+bool mysql_check_login(MYSQL* conn, const std::string& username, const std::string& password){
+	std::string safe_username = mysql_escape(conn, username);
 
-	std::string safe_password = mysql_escape(password);
+	std::string safe_password = mysql_escape(conn, password);
 
 	std::string sql =
 		"SELECT username FROM user WHERE username='" + safe_username + "' AND passwd='" +
 		safe_password + "' LIMIT 1";
 
-	int ret = mysql_query(mysql_conn, sql.c_str());
+	int ret = mysql_query(conn, sql.c_str());
 
 	if(ret != 0){
-		std::cout << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		std::cout << "mysql_query failed: " << mysql_error(conn) << '\n';
 		return false;
 	}
 
-	MYSQL_RES* result = mysql_store_result(mysql_conn);
+	MYSQL_RES* result = mysql_store_result(conn);
 
 	if(result == nullptr){
 		return false;
@@ -335,22 +335,22 @@ bool mysql_check_login(const std::string& username, const std::string& password)
 	return success;
 }
 
-bool mysql_register_user(const std::string& username, std::string& password) {
-	if(mysql_user_exists(username)) {
+bool mysql_register_user(MYSQL* conn, const std::string& username, std::string& password) {
+	if(mysql_user_exists(conn, username)) {
 		return false;
 	}
 
-	std::string safe_username = mysql_escape(username);
-	std::string safe_password = mysql_escape(password);
+	std::string safe_username = mysql_escape(conn, username);
+	std::string safe_password = mysql_escape(conn, password);
 
 	std::string sql = 
 		"INSERT INTO user(username, passwd) VALUES('" +
 		safe_username + "', '" + safe_password + "')";
 
-	int ret = mysql_query(mysql_conn, sql.c_str());
+	int ret = mysql_query(conn, sql.c_str());
 
 	if(ret != 0) {
-		std::cerr << "mysql_query failed: " << mysql_error(mysql_conn) << '\n';
+		std::cerr << "mysql_query failed: " << mysql_error(conn) << '\n';
 		return false;
 	}
 
@@ -376,11 +376,11 @@ std::string build_response(const std::string& raw_request) {
 		       return make_error_response("400 Bad Request", "username or password empty.");
 	       }
 
-	       std::lock_guard<std::mutex> lock(mysql_mutex);
+	       MYSQL* conn = mysql_pool.get_connection();
 	       std::string message;
 
 	       if(request.path == "/login") {
-		       bool success = mysql_check_login(username, password);
+		       bool success = mysql_check_login(conn, username, password);
 
 		       if(success) {
 			       message = "login success";
@@ -388,7 +388,7 @@ std::string build_response(const std::string& raw_request) {
 			       message = "login failed";
 		       }
 	       }else if(request.path == "/register") {
-		       bool success = mysql_register_user(username, password);
+		       bool success = mysql_register_user(conn, username, password);
 
 		       if(success) {
 			       message = "register success";
@@ -397,8 +397,10 @@ std::string build_response(const std::string& raw_request) {
 		       }
 	       }
 	       else{
+		       mysql_pool.release_connection(conn);
 		       return make_error_response("404 Not Found", "404 Not Found");
 	       }
+	       mysql_pool.release_connection(conn);
 		     
 
 
@@ -572,7 +574,7 @@ private:
 
 int main() {
 
-	if(!mysql_pool.iniy(8)) {
+	if(!mysql_pool.init(8)) {
 		return 1;
 	}
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
